@@ -443,7 +443,7 @@ function Status() {
 
     return <div>
         <p>{descriptionStatus}</p>
-        <p>Translation Language: {language}. В Google отправляются описания плагинов и видимый текст страниц Equicord. Переводы сохраняются локально.</p>
+        <p>Target language: {language}. Plugin descriptions and visible text from Equicord settings pages are sent to Google. Translations are stored locally.</p>
         <Button disabled={running} onClick={begin}>Retry Description Translation</Button>
         <p>{currentPageStatus}</p>
         <Button onClick={retryPageTranslation}>Retry Page Translation</Button>
