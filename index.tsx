@@ -46,16 +46,16 @@ let pageDiscoveryObserver: MutationObserver | undefined;
 let pageScanTimer: ReturnType<typeof setTimeout> | undefined;
 let pageQueue: Array<{ node: Text; source: string; token: number; }> = [];
 let pageWorkers = 0;
-let status = "Перевод ещё не запущен.";
-let pageStatus = "Перевод разделов Equicord включится автоматически при их открытии.";
+let status = "Translation has not started.";
+let pageStatus = "Equicord settings pages will be translated automatically when opened.";
 
 migratePluginSettings("EquicordTranslator", "RussianPluginDescriptions");
 
 const settings = definePluginSettings({
     targetLanguage: {
         type: OptionType.SELECT,
-        displayName: "Язык перевода",
-        description: "Язык для описаний плагинов и страниц настроек Equicord. При смене перевод обновится автоматически.",
+        displayName: "Translation Language",
+        description: "Language used for plugin descriptions and Equicord settings pages. Translations refresh automatically when you change it.",
         options: LANGUAGES,
         onChange: targetLanguageChanged
     }
@@ -67,7 +67,7 @@ function getTargetLanguage(): TranslationLanguage {
 }
 
 function languageLabel(language: TranslationLanguage) {
-    return LANGUAGES.find(option => option.value === language)?.label ?? "Russian (Русский)";
+    return LANGUAGES.find(option => option.value === language)?.label ?? "Russian";
 }
 
 function cacheKey(source: string, language: TranslationLanguage) {
@@ -192,7 +192,7 @@ async function run(token: number) {
                 completed++;
                 continue;
             }
-            report(`Переведено ${completed} из ${entries.length} на ${languageLabel(language)}. Сейчас: ${name}`);
+            report(`Translated ${completed} of ${entries.length} into ${languageLabel(language)}. Current plugin: ${name}`);
             try {
                 const result = await getTranslation(source, language);
                 if (token !== generation) return;
@@ -209,15 +209,15 @@ async function run(token: number) {
             await new Promise(resolve => setTimeout(resolve, 300));
         }
         if (token !== generation) return;
-        report(`Переведено ${completed} из ${entries.length} на ${languageLabel(language)}. ${completed < entries.length ? "Остальные можно повторить кнопкой ниже." : "Готово."} Закройте и снова откройте список плагинов.`);
+        report(`Translated ${completed} of ${entries.length} into ${languageLabel(language)}. ${completed < entries.length ? "You can retry the remaining descriptions with the button below." : "Done."} Close and reopen the plugin list.`);
         showToast(completed === entries.length
-            ? `Описания переведены на ${languageLabel(language)}. Откройте список плагинов заново.`
-            : `Переведено ${completed}/${entries.length}. Проверьте интернет и повторите в настройках плагина.`,
+            ? `Descriptions translated into ${languageLabel(language)}. Reopen the plugin list.`
+            : `Translated ${completed}/${entries.length}. Check your connection and retry in the plugin settings.`,
         completed === entries.length ? "success" : "failure");
     } catch (error) {
         if (token === generation) {
             logger.error("Translation failed", error);
-            report("Не удалось загрузить кеш. Повторите перевод.");
+            report("Could not load the translation cache. Please try again.");
         }
     } finally {
         if (token === generation) {
@@ -230,7 +230,7 @@ async function run(token: number) {
 function begin() {
     if (running) return;
     running = true;
-    report("Загрузка кеша…");
+    report("Loading the translation cache…");
     void run(++generation);
 }
 
@@ -308,7 +308,7 @@ function queuePageText(root: HTMLElement, token: number) {
 function updatePageStatus() {
     const failures = failedPageNodes.size;
     const fragments = translatedPageNodes.size;
-    reportPage(`Разделы Equicord: переведено элементов — ${fragments}${failures ? `, ошибок — ${failures}. Нажмите «Повторить перевод страницы».` : "."}`);
+    reportPage(`Equicord pages: ${fragments} items translated${failures ? `, ${failures} failed. Click “Retry page translation.”` : "."}`);
 }
 
 function drainPageQueue() {
@@ -387,13 +387,13 @@ function startPageTranslation() {
         }
     });
     pageDiscoveryObserver.observe(document.body, { childList: true, subtree: true });
-    if (!pageRoots.size) reportPage("Откройте один из разделов Equicord — он переведётся автоматически.");
+    if (!pageRoots.size) reportPage("Open a supported Equicord settings page to translate it automatically.");
 }
 
 function retryPageTranslation() {
     failedPageNodes.clear();
     for (const root of pageRoots.keys()) queuePageText(root, pageGeneration);
-    reportPage("Повторный перевод раздела запущен…");
+    reportPage("Retrying page translation…");
 }
 
 function stopPageTranslation() {
@@ -412,7 +412,7 @@ function stopPageTranslation() {
         if (node.nodeValue === translation.translated) node.nodeValue = translation.original;
     }
     translatedPageNodes.clear();
-    reportPage("Перевод разделов Equicord отключён.");
+    reportPage("Equicord page translation is disabled.");
 }
 
 function restoreDescriptions() {
@@ -443,16 +443,16 @@ function Status() {
 
     return <div>
         <p>{descriptionStatus}</p>
-        <p>Язык перевода: {language}. В Google отправляются описания плагинов и видимый текст страниц Equicord. Переводы сохраняются локально.</p>
-        <Button disabled={running} onClick={begin}>Повторить перевод описаний</Button>
+        <p>Translation Language: {language}. В Google отправляются описания плагинов и видимый текст страниц Equicord. Переводы сохраняются локально.</p>
+        <Button disabled={running} onClick={begin}>Retry Description Translation</Button>
         <p>{currentPageStatus}</p>
-        <Button onClick={retryPageTranslation}>Повторить перевод страницы</Button>
+        <Button onClick={retryPageTranslation}>Retry Page Translation</Button>
     </div>;
 }
 
 export default definePlugin({
     name: "EquicordTranslator",
-    description: "Переводит описания плагинов и страницы настроек Equicord на выбранный язык.",
+    description: "Translates plugin descriptions and Equicord settings pages into the selected language.",
     authors: [{ name: "Local User", id: 0n }],
     tags: ["Utility"],
     settings,
@@ -470,6 +470,6 @@ export default definePlugin({
         restoreDescriptions();
         originals.clear();
         applied.clear();
-        report("Перевод отключён. Откройте список плагинов заново.");
+        report("Translation is disabled. Reopen the plugin list.");
     }
 });
