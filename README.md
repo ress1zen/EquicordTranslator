@@ -1,10 +1,11 @@
 # EquicordTranslator
 
-A multilingual Equicord user plugin that translates plugin descriptions and visible text on selected Equicord settings pages.
+A multilingual Equicord user plugin that translates plugin descriptions, the labels and descriptions inside plugin settings, and visible text on selected Equicord settings pages.
 
 ## Features
 
 - Translates descriptions from built-in, disabled, and user plugins.
+- Translates setting labels, descriptions, placeholders, and visible option menus when a plugin's settings are opened.
 - Translates the Equicord Settings, Themes, Updater, Changelog, Cloud, Backup & Restore, and Patch Helper pages.
 - Offers 68 target languages and detects the source language automatically.
 - Re-translates descriptions and the open supported page when the target language changes.
@@ -22,7 +23,7 @@ Then build and inject Equicord using its documented workflow. Restart Discord, e
 
 ## Translation service and privacy
 
-Translations use Google Translate's unofficial endpoint without an API key. The plugin sends plugin descriptions and visible text from the supported Equicord settings pages to Google. It does not read Discord messages, account tokens, or profile data. Translation results are stored locally. The endpoint can rate-limit requests or change without notice.
+Translations use Google Translate's unofficial endpoint without an API key. The plugin sends plugin descriptions, visible plugin setting text, and visible text from the supported Equicord settings pages to Google. It does not read Discord messages, account tokens, or profile data. Translation results are stored locally. The endpoint can rate-limit requests or change without notice.
 
 ## License
 

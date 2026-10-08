@@ -30,8 +30,11 @@ const PAGE_TITLES = new Set([
 const originals = new Map<string, string>();
 const applied = new Map<string, string>();
 const translatedPageNodes = new Map<Text, { original: string; translated: string; }>();
+const translatedPageAttributes = new Map<Element, Map<string, { original: string; translated: string; }>>();
 const pendingPageNodes = new Map<Text, string>();
+const pendingPageAttributes = new Map<Element, Map<string, string>>();
 const failedPageNodes = new Map<Text, string>();
+const failedPageAttributes = new Map<Element, Map<string, string>>();
 const inFlightTranslations = new Map<string, Promise<string>>();
 const pageRoots = new Map<HTMLElement, MutationObserver>();
 const listeners = new Set<() => void>();
@@ -44,10 +47,10 @@ let active = false;
 let running = false;
 let pageDiscoveryObserver: MutationObserver | undefined;
 let pageScanTimer: ReturnType<typeof setTimeout> | undefined;
-let pageQueue: Array<{ node: Text; source: string; token: number; }> = [];
+let pageQueue: Array<{ node: Text; source: string; token: number; } | { element: Element; attribute: string; source: string; token: number; }> = [];
 let pageWorkers = 0;
 let status = "Translation has not started.";
-let pageStatus = "Equicord settings pages will be translated automatically when opened.";
+let pageStatus = "Equicord pages and plugin settings will be translated automatically when opened.";
 
 migratePluginSettings("EquicordTranslator", "RussianPluginDescriptions");
 
@@ -55,7 +58,7 @@ const settings = definePluginSettings({
     targetLanguage: {
         type: OptionType.SELECT,
         displayName: "Translation Language",
-        description: "Language used for plugin descriptions and Equicord settings pages. Translations refresh automatically when you change it.",
+        description: "Language used for plugin descriptions, setting names and descriptions, and Equicord settings pages. Translations refresh automatically when you change it.",
         options: LANGUAGES,
         onChange: targetLanguageChanged
     }
@@ -159,7 +162,7 @@ async function run(token: number) {
     let completed = 0;
     let consecutiveFailures = 0;
     const language = getTargetLanguage();
-    const entries = Object.entries(Plugins).filter(([, plugin]) => plugin.description?.trim());
+    const entries = Object.entries(Plugins).filter(([name, plugin]) => name !== "EquicordTranslator" && plugin.description?.trim());
     try {
         await loadCache();
         if (token !== generation) return;
@@ -268,6 +271,15 @@ function applyPageTranslation(node: Text, source: string, result: string) {
     node.nodeValue = translated;
 }
 
+function applyPageAttributeTranslation(element: Element, attribute: string, source: string, result: string) {
+    if (!element.isConnected || element.getAttribute(attribute) !== source) return;
+    const translated = translatedValue(source, result);
+    let attributes = translatedPageAttributes.get(element);
+    if (!attributes) translatedPageAttributes.set(element, attributes = new Map());
+    attributes.set(attribute, { original: source, translated });
+    element.setAttribute(attribute, translated);
+}
+
 function queuePageNode(textNode: Text, token: number) {
     const source = textNode.nodeValue ?? "";
     const trimmed = source.trim();
@@ -287,10 +299,27 @@ function queuePageNode(textNode: Text, token: number) {
     pageQueue.push({ node: textNode, source, token });
 }
 
+function queuePageAttributes(root: HTMLElement, token: number) {
+    for (const element of root.querySelectorAll("input[placeholder], textarea[placeholder], [title], [aria-label]")) {
+        for (const attribute of ["placeholder", "title", "aria-label"]) {
+            const source = element.getAttribute(attribute);
+            const trimmed = source?.trim();
+            if (!source || !trimmed || !/[a-z]/i.test(trimmed) || isAlreadyTargetLanguage(trimmed, getTargetLanguage())) continue;
+            if (translatedPageAttributes.get(element)?.get(attribute)?.translated === source) continue;
+            if (pendingPageAttributes.get(element)?.get(attribute) === source || failedPageAttributes.get(element)?.get(attribute) === source) continue;
+            let pending = pendingPageAttributes.get(element);
+            if (!pending) pendingPageAttributes.set(element, pending = new Map());
+            pending.set(attribute, source);
+            pageQueue.push({ element, attribute, source, token });
+        }
+    }
+}
+
 function queuePageText(root: HTMLElement, token: number) {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node: Node | null;
     while ((node = walker.nextNode())) queuePageNode(node as Text, token);
+    queuePageAttributes(root, token);
 
     for (let parent = root.parentElement, depth = 0; parent && depth < 5; parent = parent.parentElement, depth++) {
         const title = Array.from(parent.querySelectorAll("h1, h2, h3, h4, h5, h6, [role=heading]"))
@@ -306,9 +335,9 @@ function queuePageText(root: HTMLElement, token: number) {
 }
 
 function updatePageStatus() {
-    const failures = failedPageNodes.size;
-    const fragments = translatedPageNodes.size;
-    reportPage(`Equicord pages: ${fragments} items translated${failures ? `, ${failures} failed. Click “Retry page translation.”` : "."}`);
+    const failures = failedPageNodes.size + Array.from(failedPageAttributes.values()).reduce((count, attributes) => count + attributes.size, 0);
+    const fragments = translatedPageNodes.size + Array.from(translatedPageAttributes.values()).reduce((count, attributes) => count + attributes.size, 0);
+    reportPage(`Equicord and plugin settings: ${fragments} items translated${failures ? `, ${failures} failed. Click “Retry page translation.”` : "."}`);
 }
 
 function drainPageQueue() {
@@ -318,20 +347,32 @@ function drainPageQueue() {
         void (async () => {
             try {
                 await loadCache();
-                if (task.token !== pageGeneration || task.node.nodeValue !== task.source || !task.node.isConnected) return;
+                const isAttributeTask = "element" in task;
+                const target = isAttributeTask ? task.element : task.node;
+                const currentValue = isAttributeTask ? task.element.getAttribute(task.attribute) : task.node.nodeValue;
+                if (task.token !== pageGeneration || currentValue !== task.source || !target.isConnected) return;
                 const source = task.source.trim();
                 const result = await getTranslation(source, getTargetLanguage());
                 if (task.token !== pageGeneration) return;
-                applyPageTranslation(task.node, task.source, result);
+                if (isAttributeTask) applyPageAttributeTranslation(task.element, task.attribute, task.source, result);
+                else applyPageTranslation(task.node, task.source, result);
                 updatePageStatus();
             } catch (error) {
                 if (task.token === pageGeneration) {
-                    failedPageNodes.set(task.node, task.source);
+                    if ("element" in task) {
+                        let failed = failedPageAttributes.get(task.element);
+                        if (!failed) failedPageAttributes.set(task.element, failed = new Map());
+                        failed.set(task.attribute, task.source);
+                    } else failedPageNodes.set(task.node, task.source);
                     logger.warn("Could not translate Equicord settings text", error);
                     updatePageStatus();
                 }
             } finally {
-                if (pendingPageNodes.get(task.node) === task.source) pendingPageNodes.delete(task.node);
+                if ("element" in task) {
+                    const pending = pendingPageAttributes.get(task.element);
+                    if (pending?.get(task.attribute) === task.source) pending.delete(task.attribute);
+                    if (pending?.size === 0) pendingPageAttributes.delete(task.element);
+                } else if (pendingPageNodes.get(task.node) === task.source) pendingPageNodes.delete(task.node);
                 pageWorkers--;
                 if (pageQueue.length) setTimeout(drainPageQueue, 180);
             }
@@ -343,7 +384,7 @@ function watchPageRoot(root: HTMLElement, token: number) {
     if (pageRoots.has(root)) return;
     const observer = new MutationObserver(() => queuePageText(root, token));
     pageRoots.set(root, observer);
-    observer.observe(root, { childList: true, characterData: true, subtree: true });
+    observer.observe(root, { childList: true, characterData: true, attributes: true, subtree: true });
     queuePageText(root, token);
     updatePageStatus();
 }
@@ -359,6 +400,22 @@ function inspectAddedNode(node: Node, token: number) {
     for (const root of element.querySelectorAll<HTMLElement>(".vc-settings-tab")) {
         if (isSupportedSettingsPage(root)) watchPageRoot(root, token);
     }
+
+    const pluginSettings = element.closest<HTMLElement>(".vc-plugins-settings");
+    if (pluginSettings && !isTranslatorSettingsModal()) watchPageRoot(pluginSettings, token);
+    for (const root of element.querySelectorAll<HTMLElement>(".vc-plugins-settings")) {
+        if (!isTranslatorSettingsModal()) watchPageRoot(root, token);
+    }
+    if (document.querySelector(".vc-plugin-modal-header") && !isTranslatorSettingsModal()) {
+        if (element instanceof HTMLElement && element.matches("[role=option], [role=listbox], [role=menu]")) watchPageRoot(element, token);
+        for (const root of element.querySelectorAll("[role=option], [role=listbox], [role=menu]")) {
+            if (root instanceof HTMLElement) watchPageRoot(root, token);
+        }
+    }
+}
+
+function isTranslatorSettingsModal() {
+    return document.querySelector(".vc-plugin-modal-header")?.textContent?.trim() === "EquicordTranslator";
 }
 
 function schedulePageScan() {
@@ -374,6 +431,9 @@ function startPageTranslation() {
     for (const root of document.querySelectorAll<HTMLElement>(".vc-settings-tab")) {
         if (isSupportedSettingsPage(root)) watchPageRoot(root, token);
     }
+    if (!isTranslatorSettingsModal()) {
+        for (const root of document.querySelectorAll<HTMLElement>(".vc-plugins-settings")) watchPageRoot(root, token);
+    }
     document.addEventListener("scroll", schedulePageScan, true);
     pageDiscoveryObserver = new MutationObserver(records => {
         for (const record of records) {
@@ -383,15 +443,22 @@ function startPageTranslation() {
             if (!root.isConnected) {
                 observer.disconnect();
                 pageRoots.delete(root);
+                for (const node of translatedPageNodes.keys()) if (root.contains(node)) translatedPageNodes.delete(node);
+                for (const element of translatedPageAttributes.keys()) if (root.contains(element)) translatedPageAttributes.delete(element);
+                for (const node of pendingPageNodes.keys()) if (root.contains(node)) pendingPageNodes.delete(node);
+                for (const element of pendingPageAttributes.keys()) if (root.contains(element)) pendingPageAttributes.delete(element);
+                for (const node of failedPageNodes.keys()) if (root.contains(node)) failedPageNodes.delete(node);
+                for (const element of failedPageAttributes.keys()) if (root.contains(element)) failedPageAttributes.delete(element);
             }
         }
     });
     pageDiscoveryObserver.observe(document.body, { childList: true, subtree: true });
-    if (!pageRoots.size) reportPage("Open a supported Equicord settings page to translate it automatically.");
+    if (!pageRoots.size) reportPage("Open an Equicord page or plugin settings to translate it automatically.");
 }
 
 function retryPageTranslation() {
     failedPageNodes.clear();
+    failedPageAttributes.clear();
     for (const root of pageRoots.keys()) queuePageText(root, pageGeneration);
     reportPage("Retrying page translation…");
 }
@@ -407,11 +474,19 @@ function stopPageTranslation() {
     pageRoots.clear();
     pageQueue = [];
     pendingPageNodes.clear();
+    pendingPageAttributes.clear();
     failedPageNodes.clear();
+    failedPageAttributes.clear();
     for (const [node, translation] of translatedPageNodes) {
         if (node.nodeValue === translation.translated) node.nodeValue = translation.original;
     }
     translatedPageNodes.clear();
+    for (const [element, attributes] of translatedPageAttributes) {
+        for (const [attribute, translation] of attributes) {
+            if (element.getAttribute(attribute) === translation.translated) element.setAttribute(attribute, translation.original);
+        }
+    }
+    translatedPageAttributes.clear();
     reportPage("Equicord page translation is disabled.");
 }
 
@@ -443,7 +518,7 @@ function Status() {
 
     return <div>
         <p>{descriptionStatus}</p>
-        <p>Target language: {language}. Plugin descriptions and visible text from Equicord settings pages are sent to Google. Translations are stored locally.</p>
+        <p>Target language: {language}. Plugin descriptions, setting labels and visible text from Equicord settings pages are sent to Google. Translations are stored locally.</p>
         <Button disabled={running} onClick={begin}>Retry Description Translation</Button>
         <p>{currentPageStatus}</p>
         <Button onClick={retryPageTranslation}>Retry Page Translation</Button>
